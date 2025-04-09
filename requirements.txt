@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+opensearch-py
+sqlalchemy
+pydantic
+passlib[bcrypt]
+PyJWT
+psycopg2-binary
+python-multipart
+openai
+firebase-admin
+boto3
