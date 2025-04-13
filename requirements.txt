@@ -8,5 +8,8 @@ PyJWT
 psycopg2-binary
 python-multipart
 openai
-firebase-admin
 boto3
+dotenv
+pypdf2
+python-docx
+aiofiles
