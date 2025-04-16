@@ -1,13 +1,17 @@
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
 from openai import OpenAI
 import aiofiles
 import os
+from sqlalchemy.orm import Session
 import tempfile
-from PyPDF2 import PdfReader
-from docx import Document
 import boto3
+
+from app.models import UploadedFile
 from .config import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+from .database import get_db
+from .models import UploadedFile
+from .read_files import read_pdf, read_docx
 
 s3 = boto3.resource(
     service_name="s3",
@@ -20,22 +24,11 @@ client = OpenAI()
 
 conversation_history = []
 
-def read_pdf(file_path):
-    text = ""
-    with open(file_path, "rb") as f:
-        reader = PdfReader(f)
-        for page in reader.pages:
-            text += page.extract_text() or ""
-    return text
-
-def read_docx(file_path):
-    doc = Document(file_path)
-    return "\n".join([para.text for para in doc.paragraphs])
-
 @router.post("/")
 async def generate_response(
     input: str = Form(...),
-    file: UploadFile = File(default=None)
+    file: UploadFile = File(default=None),
+    db: Session = Depends(get_db)
 ):
     try:
         file_text = ""
@@ -63,7 +56,7 @@ async def generate_response(
                 model="gpt-4",
                 messages=[{
                     "role": "system",
-                    "content": "Generate a four-word filename in word1_word2_word3_word4 format based on the following text. Only respond with the filename, no additional text or explanation."
+                    "content": "Generate a eight-word filename in word1_word2_word3_word4 format based on the following text. Only respond with the filename, no additional text or explanation."
                 }, {
                     "role": "user",
                     "content": file_text[:4000]  # Limit to first 4000 chars to avoid token limits
@@ -73,6 +66,13 @@ async def generate_response(
             generated_filename = file_response.choices[0].message.content.strip()
 
             s3.Bucket("dummy-e").upload_file(Key=f"{generated_filename}{suffix}", Filename=temp_file_path)
+
+            db_file = UploadedFile(
+                filename=generated_filename,
+            )
+            db.add(db_file)
+            db.commit()
+            db.refresh(db_file)
 
             os.unlink(temp_file.name)
 
@@ -96,3 +96,9 @@ async def generate_response(
 
     except (BotoCoreError, ClientError) as e:
         raise HTTPException(status_code=500, detail=f"Error uploading file to S3: {str(e)}")
+
+@router.get("/")
+def get_filenames(db: Session = Depends(get_db)):
+    uploaded_files = db.query(UploadedFile).all()
+
+    return uploaded_files

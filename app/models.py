@@ -10,3 +10,10 @@ class User(Base):
     email = Column(String, unique=True, nullable=False)
     password = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
+
+class UploadedFile(Base):
+    __tablename__ = "uploaded_files"
+
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String, unique=True, nullable=False)
+    embedding_vector = Column(String, nullable=False)
