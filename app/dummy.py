@@ -1,3 +1,4 @@
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from openai import OpenAI
 import aiofiles
@@ -5,7 +6,15 @@ import os
 import tempfile
 from PyPDF2 import PdfReader
 from docx import Document
+import boto3
+from .config import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 
+s3 = boto3.resource(
+    service_name="s3",
+    region_name="eu-north-1",
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+)
 router = APIRouter()
 client = OpenAI()
 
@@ -32,12 +41,14 @@ async def generate_response(
         file_text = ""
 
         if file:
+            temp_file_path = None
             filename = file.filename
             if not filename.endswith((".pdf", ".docx")):
                 raise HTTPException(status_code=400, detail="Only PDF and DOCX files are allowed.")
 
             suffix = os.path.splitext(filename)[-1]
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+            temp_file_path = temp_file.name
             async with aiofiles.open(temp_file.name, 'wb') as out_file:
                 content = await file.read()
                 await out_file.write(content)
@@ -47,6 +58,21 @@ async def generate_response(
                 file_text = read_pdf(temp_file.name)
             elif suffix == ".docx":
                 file_text = read_docx(temp_file.name)
+
+            file_response = client.chat.completions.create(
+                model="gpt-4",
+                messages=[{
+                    "role": "system",
+                    "content": "Generate a four-word filename in word1_word2_word3_word4 format based on the following text. Only respond with the filename, no additional text or explanation."
+                }, {
+                    "role": "user",
+                    "content": file_text[:4000]  # Limit to first 4000 chars to avoid token limits
+                }]
+            )
+
+            generated_filename = file_response.choices[0].message.content.strip()
+
+            s3.Bucket("dummy-e").upload_file(Key=f"{generated_filename}{suffix}", Filename=temp_file_path)
 
             os.unlink(temp_file.name)
 
@@ -67,5 +93,6 @@ async def generate_response(
 
         return {"output": reply}
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+    except (BotoCoreError, ClientError) as e:
+        raise HTTPException(status_code=500, detail=f"Error uploading file to S3: {str(e)}")

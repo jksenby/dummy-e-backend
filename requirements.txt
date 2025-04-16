@@ -4,6 +4,7 @@ opensearch-py
 sqlalchemy
 pydantic
 passlib[bcrypt]
+bcrypt==3.2.0
 PyJWT
 psycopg2-binary
 python-multipart
