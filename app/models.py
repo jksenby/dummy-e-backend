@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, LargeBinary
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from .database import Base
@@ -16,4 +16,4 @@ class UploadedFile(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String, unique=True, nullable=False)
-    embedding_vector = Column(String, nullable=False)
+    embedding_vector = Column(LargeBinary, nullable=True)

@@ -6,8 +6,11 @@ import os
 from sqlalchemy.orm import Session
 import tempfile
 import boto3
+import faiss
+from sentence_transformers import SentenceTransformer
+import numpy as np
+import pickle
 
-from app.models import UploadedFile
 from .config import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 from .database import get_db
 from .models import UploadedFile
@@ -19,6 +22,8 @@ s3 = boto3.resource(
     aws_access_key_id=AWS_ACCESS_KEY_ID,
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
 )
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
 router = APIRouter()
 client = OpenAI()
 
@@ -67,14 +72,48 @@ async def generate_response(
 
             s3.Bucket("dummy-e").upload_file(Key=f"{generated_filename}{suffix}", Filename=temp_file_path)
 
+            embedding = model.encode(file_text).astype(np.float32)
+
+            # Store embedding as binary blob
+            embedding_blob = pickle.dumps(embedding)
+
+            # Save metadata to DB
             db_file = UploadedFile(
                 filename=generated_filename,
+                embedding_vector=embedding_blob,
             )
+
             db.add(db_file)
             db.commit()
             db.refresh(db_file)
 
             os.unlink(temp_file.name)
+
+        else:
+            query_embedding = model.encode(input).astype(np.float32)
+
+            # Load all saved embeddings from DB
+            files = db.query(UploadedFile).all()
+            similarities = []
+
+            for f in files:
+                if f.embedding_vector:
+                    stored_vector = pickle.loads(f.embedding_vector)
+                    score = np.dot(stored_vector, query_embedding)  # cosine similarity if vectors are normalized
+                    similarities.append((score, f.filename))
+
+            # Get top matching file
+            if similarities:
+                best_match = max(similarities, key=lambda x: x[0])
+                matched_filename = best_match[1]
+            else:
+                matched_filename = None
+
+            if matched_filename:
+                obj = s3.Object("dummy-e", f"{matched_filename}.pdf")  # or .docx based on suffix
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
+                    obj.download_fileobj(f)
+                    file_text = read_pdf(f.name)  # or read_docx
 
         full_prompt = input + ("\n\n" + file_text if file_text else "")
 
