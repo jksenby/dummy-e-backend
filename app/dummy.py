@@ -1,19 +1,21 @@
+from typing import Literal
+
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
 from openai import OpenAI
 import aiofiles
 import os
+
 from sqlalchemy.orm import Session
 import tempfile
 import boto3
-import faiss
 from sentence_transformers import SentenceTransformer
 import numpy as np
 import pickle
 
 from .config import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 from .database import get_db
-from .models import UploadedFile
+from .models import UploadedFile, Request
 from .read_files import read_pdf, read_docx
 
 s3 = boto3.resource(
@@ -27,16 +29,15 @@ model = SentenceTransformer("all-MiniLM-L6-v2")
 router = APIRouter()
 client = OpenAI()
 
-conversation_history = []
-
 @router.post("/")
 async def generate_response(
-    input: str = Form(...),
+    user_input: str = Form(...),
     file: UploadFile = File(default=None),
     db: Session = Depends(get_db)
 ):
     try:
         file_text = ""
+        conversation_history = db.query(Request).order_by(Request.created_at.desc()).all()
 
         if file:
             temp_file_path = None
@@ -90,7 +91,7 @@ async def generate_response(
             os.unlink(temp_file.name)
 
         else:
-            query_embedding = model.encode(input).astype(np.float32)
+            query_embedding = model.encode(user_input).astype(np.float32)
 
             # Load all saved embeddings from DB
             files = db.query(UploadedFile).all()
@@ -99,7 +100,10 @@ async def generate_response(
             for f in files:
                 if f.embedding_vector:
                     stored_vector = pickle.loads(f.embedding_vector)
-                    score = np.dot(stored_vector, query_embedding)  # cosine similarity if vectors are normalized
+
+                    stored_vector = stored_vector / np.linalg.norm(stored_vector)
+                    query_embedding_norm = query_embedding / np.linalg.norm(query_embedding)
+                    score = np.dot(stored_vector, query_embedding_norm)
                     similarities.append((score, f.filename))
 
             # Get top matching file
@@ -110,25 +114,55 @@ async def generate_response(
                 matched_filename = None
 
             if matched_filename:
-                obj = s3.Object("dummy-e", f"{matched_filename}.pdf")  # or .docx based on suffix
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
-                    obj.download_fileobj(f)
-                    file_text = read_pdf(f.name)  # or read_docx
+                for ext in ['.pdf', '.docx']:
+                    try:
+                        obj = s3.Object("dummy-e", f"{matched_filename}{ext}")
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as f:
+                            obj.download_fileobj(f)
+                            f.flush()  # Ensure all data is written
+                            if ext == '.pdf':
+                                file_text = read_pdf(f.name)
+                            else:
+                                file_text = read_docx(f.name)
+                            break
+                    except ClientError:
+                        continue
 
-        full_prompt = input + ("\n\n" + file_text if file_text else "")
+        full_prompt = user_input + ("\n\n" + file_text if file_text else "")
 
-        # Add user message to conversation history
-        conversation_history.append({"role": "user", "content": full_prompt})
+        user_message = Request(
+            role="user",
+            content=full_prompt,
+        )
+        db.add(user_message)
+        db.commit()
+
+        messages = [{
+            "role": "user",
+            "content": full_prompt
+        }]
+
+        for msg in conversation_history:
+            messages.insert(0, {
+                "role": msg.role,
+                "content": msg.content
+            })
 
         # Generate response
         response = client.chat.completions.create(
             model="gpt-4o",
-            messages=conversation_history
+            messages=messages,
         )
 
         # Add assistant reply to history
         reply = response.choices[0].message.content
-        conversation_history.append({"role": "assistant", "content": reply})
+        assistant_message = Request(
+            role="assistant",
+            content=reply,
+        )
+
+        db.add(assistant_message)
+        db.commit()
 
         return {"output": reply}
 
