@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-
+print(os.getenv("DATABASE_URL", "postgresql://user:password@db:5432/server_monitoring"))
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@db:5432/server_monitoring")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 JWT_SECRET = os.getenv("JWT_SECRET", "supersecret")

@@ -25,3 +25,8 @@ class LoginRequest(BaseModel):
 class PasswordChange(BaseModel):
     current_password: str
     new_password: str = Field(..., min_length=8)
+
+class FileResponse(BaseModel):
+    temp_file: str
+    filename: str
+    media_type: str

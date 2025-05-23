@@ -17,3 +17,5 @@ aiofiles
 numpy
 sentence-transformers
 faiss-cpu
+tiktoken
+tenacity
